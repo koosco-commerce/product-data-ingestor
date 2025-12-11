@@ -185,3 +185,73 @@ pip install kaggle jupyter jupyterlab tabulate
 - **Inventory Service**: 재고 관리 및 성능 테스트
 
 > **참고**: 부하 테스트 목적으로 생성된 더미 데이터로, 실제 상품-옵션 매핑 관계는 의미가 없습니다.
+
+## Issue
+
+### JSON Format Issue (SKU 옵션 값 삽입 실패 문제)
+
+대량 생성된 SKU 데이터(`catalog_product_skus.csv`)를 MySQL에 적재하는 과정에서
+`product_skus.option_values` 컬럼에 JSON 문자열이 정상적으로 삽입되지 않는 문제가 발생했습니다.
+
+### 증상
+
+상품 옵션이 존재하는 SKU를 삽입할 때 다음 오류가 발생:
+
+```
+ERROR 4025 (23000): CONSTRAINT product_skus.option_values failed
+pymysql.err.OperationalError: (4025, ‘CONSTRAINT product_skus.option_values failed’)
+```
+
+### 원인 분석
+
+CSV 파일에 저장된 옵션 값이 유효한 JSON 문자열이 아니었기 때문에 발생한 문제였습니다.
+
+자동 생성된 옵션 값 예시:
+
+```json
+{‘Color’: ‘Black’, ‘Capacity’: ‘Small’}
+```
+
+이는 Python의 dict 문자열 형태이며, 아래 문제를 가집니다:
+
+- 작은따옴표 `'` 사용 → JSON 표준 아님
+- CSV 저장 시 quoting이 깨지면서 MySQL JSON 파서가 invalid 판단
+- MySQL의 JSON_VALID() 체크에서 실패 → INSERT 거부
+
+### 해결 방법
+
+CSV 저장 전에 옵션 문자열을 반드시 **JSON 표준 문자열**로 변환해야 합니다.
+
+#### 변환 코드:
+
+```python
+import ast
+import json
+
+def fix_options(o):
+    try:
+        obj = ast.literal_eval(o)  # "{'Color': 'Black'}" → {'Color': 'Black'}
+        return json.dumps(obj, ensure_ascii=False)  # dict → valid JSON string
+    except:
+        return "{}"
+```
+
+변환 후 CSV에는 아래처럼 저장:
+
+```json
+"{""Color"": ""Black"", ""Capacity"": ""Small""}"
+```
+
+MySQL이 읽을 때는 다음처럼 정상 JSON으로 저장됨:
+
+```json
+{ "Color": "Black", "Capacity": "Small" }
+```
+
+### 결과
+
+- MySQL JSON_VALID() 통과
+- product_skus 테이블에 옵션값 정상 삽입
+- 대량 데이터 로딩 전체 과정 완전 성공
+
+csv에 저장되는 문자열 형태는 실제 DB 입력 형태와 다를 수 있기 때문에 json 저장 시 항상 큰 따옴표로 표준화하는 과정이 필요합니다. 데이터 생성 파이프라인에서 JSON serialization 단계가 필수적으로 필요합니다.
