@@ -7,6 +7,7 @@ catalog / inventory DB에 배치 삽입한다.
 의존성: pip install psycopg2-binary python-dotenv
 """
 
+import argparse
 import itertools
 import json
 import os
@@ -282,6 +283,33 @@ def create_inventory_table():
 
 
 # ---------------------------------------------------------------------------
+# 리셋 (멱등성 지원)
+# ---------------------------------------------------------------------------
+
+def reset_databases():
+    """기존 데이터를 TRUNCATE 하여 초기 상태로 되돌린다."""
+    conn = get_connection("catalog")
+    cur = conn.cursor()
+    cur.execute("""
+        TRUNCATE product_skus, product_options, product_option_groups,
+                 products, categories
+        RESTART IDENTITY CASCADE;
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+    print("  Catalog tables truncated.")
+
+    conn = get_connection("inventory")
+    cur = conn.cursor()
+    cur.execute("TRUNCATE inventory RESTART IDENTITY;")
+    conn.commit()
+    cur.close()
+    conn.close()
+    print("  Inventory table truncated.")
+
+
+# ---------------------------------------------------------------------------
 # Phase 2: 데이터 생성 (in-memory)
 # ---------------------------------------------------------------------------
 
@@ -515,7 +543,7 @@ def insert_inventory(inventories):
 # main
 # ---------------------------------------------------------------------------
 
-def main():
+def main(reset=False):
     print("=" * 60)
     print("PostgreSQL Dummy Data Generator")
     print("=" * 60)
@@ -528,6 +556,10 @@ def main():
 
     print("\n[3/7] Creating inventory table...")
     create_inventory_table()
+
+    if reset:
+        print("\n[RESET] Truncating all tables...")
+        reset_databases()
 
     print("\n[4/7] Generating all data in-memory...")
     products, skus, inventories, option_groups, options = generate_all_data()
@@ -566,4 +598,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="PostgreSQL 더미 데이터 생성 및 삽입")
+    parser.add_argument("--reset", action="store_true",
+                        help="기존 데이터를 모두 삭제 후 재삽입")
+    args = parser.parse_args()
+    main(reset=args.reset)
